@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Анализатор платежей</title>
+    <!-- Cache-Control Headers -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <style>
+        :root {
+            --bg-color: #f0f2f5; --card-bg-color: #ffffff; --primary-text-color: #1c1e21;
+            --secondary-text-color: #606770; --border-color: #ced0d4; --input-bg-color: #f5f6f7;
+            --accent-color: #007bff; --accent-color-dark: #0056b3;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color); color: var(--primary-text-color); margin: 0;
+            padding: 15px; font-size: 16px;
+        }
+        .container { max-width: 600px; margin: 0 auto; }
+        h1 { font-size: 24px; font-weight: 600; text-align: center; margin-bottom: 20px; }
+        h2 { font-size: 20px; font-weight: 600; margin-bottom: 15px; }
+        .card { background-color: var(--card-bg-color); border-radius: 8px; padding: 16px; margin-bottom: 20px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; font-weight: 600; margin-bottom: 6px; color: var(--secondary-text-color); }
+        textarea {
+            width: 100%; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; background-color: var(--input-bg-color);
+            box-sizing: border-box; font-size: 1.1em; color: var(--primary-text-color); -webkit-appearance: none;
+            font-family: inherit;
+            resize: none;
+            overflow-y: hidden;
+        }
+        textarea:focus { outline: none; border-color: var(--accent-color); box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25); }
+        textarea::placeholder { color: #adb5bd; opacity: 1; }
+        .btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 6px; font-size: 1.1em; font-weight: 600; cursor: pointer; text-align: center; margin-bottom: 10px; }
+        .option { display: flex; align-items: center; gap: 10px; font-weight: 500; color: var(--primary-text-color); margin-bottom: 10px; cursor: pointer; }
+        .option input { width: 20px; height: 20px; margin: 0; flex-shrink: 0; }
+        #calculateBtn { background-color: var(--accent-color); color: white; }
+        #calculateBtn:hover { background-color: var(--accent-color-dark); }
+        #resultOutput {
+            width: 100%; min-height: 200px; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px;
+            background-color: var(--input-bg-color); box-sizing: border-box; font-family: monospace; font-size: 0.95em;
+            color: var(--primary-text-color); resize: vertical; margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Анализатор платежей</h1>
+        
+        <div class="card">
+            <div class="form-group">
+                <label for="inputArea">Текст для анализа</label>
+                <textarea id="inputArea" placeholder="700	баланс..." rows="4"></textarea>
+                 <p style="font-size: smaller; color: #555; margin-top: 10px;">Теги: 'us' для отдельной категории. 'баланс', 'карта' и 'гд' для исключения из основного подсчета.</p>
+            </div>
+            <label class="option"><input type="checkbox" id="optSplitUs" checked> Выделять Us отдельно (иначе считаем всё вместе)</label>
+            <label class="option"><input type="checkbox" id="optExclBalance" checked> Считать отдельно без баланса</label>
+            <label class="option"><input type="checkbox" id="optExclCard" checked> Считать отдельно без карт</label>
+            <label class="option"><input type="checkbox" id="optExclGd" checked> Считать отдельно без гд</label>
+        </div>
+
+        <div class="card">
+            <h2>Результат</h2>
+            <button id="calculateBtn" class="btn">Анализировать</button>
+            <textarea id="resultOutput" readonly placeholder="Здесь появится результат..."></textarea>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const inputElem = document.getElementById('inputArea');
+            const outputElem = document.getElementById('resultOutput');
+            const processButton = document.getElementById('calculateBtn');
+
+            function autoResizeTextarea(element) {
+                if (!element) return;
+                element.style.height = 'auto';
+                element.style.height = (element.scrollHeight) + 'px';
+            }
+
+            inputElem.addEventListener('input', () => autoResizeTextarea(inputElem));
+
+            function performAnalysis() {
+                const splitUs = document.getElementById('optSplitUs').checked;
+                const exclusionOptions = [
+                    { keyword: 'баланс', name: 'баланса', enabled: document.getElementById('optExclBalance').checked },
+                    { keyword: 'карт', name: 'карт', enabled: document.getElementById('optExclCard').checked },
+                    { keyword: 'гд', name: 'гд', enabled: document.getElementById('optExclGd').checked }
+                ].filter(o => o.enabled);
+                const splitExcluded = exclusionOptions.length > 0;
+                const inputText = inputElem.value;
+                const lines = inputText.split('\n');
+                
+                const allNumbers = [];
+                const untaggedNumbers = [];
+                const usNumbers = [];
+
+                const excludedNames = exclusionOptions.map(o => o.name);
+                const joinNames = (names) => names.length > 1
+                    ? names.slice(0, -1).join(', ') + ' и ' + names[names.length - 1]
+                    : names[0];
+
+                lines.forEach(line => {
+                    if (!line.trim()) return;
+
+                    const parts = line.trim().split(/\s+/);
+                    const numberStr = parts[0].replace(/\s/g, '').replace(',', '.');
+                    const number = parseFloat(numberStr);
+
+                    if (isNaN(number)) {
+                        return; 
+                    }
+
+                    const comment = parts.slice(1).join(' ').toLowerCase();
+                    
+                    if (splitUs && comment.includes('us')) {
+                        usNumbers.push(number);
+                    } else {
+                        allNumbers.push(number);
+                        const isExcluded = exclusionOptions.some(o => comment.includes(o.keyword));
+                        if (!isExcluded) {
+                            untaggedNumbers.push(number);
+                        }
+                    }
+                });
+
+                if (allNumbers.length === 0 && usNumbers.length === 0) {
+                    outputElem.value = 'Числа для анализа не найдены.';
+                    return;
+                }
+
+                const formatNumber = (num) => {
+                    const [intPart, decPart] = num.toFixed(2).replace(/\.?0+$/, '').split('.');
+                    const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+                    return decPart ? `${formattedInt},${decPart}` : formattedInt;
+                };
+
+                const totalWith = allNumbers.reduce((a, b) => a + b, 0);
+                const totalWithout = untaggedNumbers.reduce((a, b) => a + b, 0);
+                const totalUs = usNumbers.reduce((a, b) => a + b, 0);
+
+                const withStrings = allNumbers.map(formatNumber);
+                const withoutStrings = untaggedNumbers.map(formatNumber);
+                const usStrings = usNumbers.map(formatNumber);
+
+                const formatGroup = (strings, total) => {
+                    if (strings.length === 0) return '0';
+                    if (strings.length === 1) return strings[0];
+                    return `${strings.join('+')} = ${formatNumber(total)}`;
+                };
+
+                const blocks = [];
+                blocks.push('Всего\n' + formatGroup(withStrings, totalWith));
+                if (splitExcluded) {
+                    blocks.push('Без ' + joinNames(excludedNames) + '\n' + formatGroup(withoutStrings, totalWithout));
+                }
+                if (splitUs) {
+                    blocks.push('Us\n' + formatGroup(usStrings, totalUs));
+                }
+                let resultText = blocks.join('\n\n');
+
+                resultText += '\n\n---\nСтатистика:\n';
+                const stats = [`- Всего${splitUs ? ' (кроме Us)' : ''}: ${allNumbers.length}`];
+                if (splitExcluded) stats.push(`- Без тегов: ${untaggedNumbers.length}`);
+                if (splitUs) stats.push(`- Us: ${usNumbers.length}`);
+                resultText += stats.join('\n');
+
+                outputElem.value = resultText;
+                autoResizeTextarea(outputElem);
+            }
+
+            if (processButton) {
+                processButton.addEventListener('click', performAnalysis);
+            }
+
+            // Пересчитывать сразу при переключении галочек, если результат уже есть
+            document.querySelectorAll('.option input').forEach(cb => {
+                cb.addEventListener('change', () => {
+                    if (outputElem.value) performAnalysis();
+                });
+            });
+
+            // Initial resize on load
+            autoResizeTextarea(inputElem);
+        });
+    </script>
+
+</body>
+</html>
